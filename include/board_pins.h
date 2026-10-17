@@ -25,8 +25,8 @@
 #define LIGHT_PIN          A2
 
 /* ---- GPS Air530Z (liaison serie logicielle) : port Grove A0 ---- */
-#define GPS_RX_PIN         A0    /* l'Arduino RECOIT sur A0 (fil jaune) */
-#define GPS_TX_PIN         A1    /* l'Arduino ENVOIE sur A1 (fil blanc) */
+   #define GPS_RX_PIN         8
+   #define GPS_TX_PIN         9    /* l'Arduino ENVOIE sur A1 (fil blanc) */
 #define GPS_BAUDRATE       9600
 /* Si le GPS ne renvoie jamais rien : inverser A0 et A1 ci-dessus. */
 

@@ -18,7 +18,7 @@
 #include "grove_light.h"
 #include "grove_rtc_ds1307.h"
 #include "grove_gps_air530z.h"
-#include "grove_bme680.h"
+#include "grove_bme280.h"
 #include "sd_logger.h"
 
 static bool rtc_ok = false, bme_ok = false, sd_ok = false;
@@ -54,12 +54,12 @@ void setup()
     GroveRGB_Off();
 
     rtc_ok = GroveRTC_Init();
-    bme_ok = GroveBME680_Init();
+    bme_ok = GroveBME280_Init();
     sd_ok  = SDLogger_Init();
     if (sd_ok) sd_ok = SDLogger_WriteLine("TEST.LOG", "Test ecriture OK");
 
     afficher_ok(F("Horloge RTC"), rtc_ok);
-    afficher_ok(F("Capteur BME680"), bme_ok);
+    afficher_ok(F("Capteur BME280"), bme_ok);
     afficher_ok(F("Carte SD (ecriture TEST.LOG)"), sd_ok);
     Serial.println(F("Boutons : rouge -> LED rouge, vert -> LED verte."));
     Serial.println(F("----------------------------------------------"));
@@ -89,8 +89,8 @@ void loop()
     }
 
     Env_Data env;
-    Serial.print(F(" | BME680: "));
-    if (bme_ok && GroveBME680_ReadEnvironment(&env)) {
+    Serial.print(F(" | BME280: "));
+    if (bme_ok && GroveBME280_ReadEnvironment(&env)) {
         Serial.print(env.temperature_c, 1);    Serial.print(F(" C, "));
         Serial.print(env.humidity_percent, 1); Serial.print(F(" %, "));
         Serial.print(env.pressure_hpa, 1);     Serial.print(F(" hPa"));

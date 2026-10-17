@@ -30,7 +30,6 @@ typedef struct {
     float temperature_c;
     float humidity_percent;
     float pressure_hpa;
-    float gas_resistance_ohm;
 } Env_Data;
 
 /* ================== AJOUTS DU GROUPE ================== */
