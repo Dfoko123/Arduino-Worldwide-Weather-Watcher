@@ -32,7 +32,49 @@ typedef struct {
     float pressure_hpa;
 } Env_Data;
 
-/* ================== AJOUTS DU GROUPE ================== */
-/* (le membre 1 colle ici le bloc de sa fiche, etape 1.1) */
+typedef enum {
+    MODE_STANDARD = 0,
+    MODE_CONFIG,
+    MODE_MAINTENANCE,
+    MODE_ECO
+} Mode;
+typedef enum {
+    ERR_AUCUNE = 0,
+    ERR_RTC,            /* LED rouge/bleu   1:1 */
+    ERR_GPS,            /* LED rouge/jaune  1:1 */
+    ERR_CAPTEUR_ACCES,  /* LED rouge/vert   1:1 */
+    ERR_CAPTEUR_INCOH,  /* LED rouge/vert   1:2 (vert 2x plus long)  */
+    ERR_SD_PLEINE,      /* LED rouge/blanc  1:1 */
+    ERR_SD_ACCES,       /* LED rouge/blanc  1:2 (blanc 2x plus long) */
+    ERR_NB              /* nombre d'erreurs : TOUJOURS en dernier */
+} CodeErreur;
+typedef struct {
+    bool    valide;       /* false => "NA" dans le fichier            */
+    uint8_t nb_timeouts;  /* echecs de suite ; 2 => capteur en erreur */
+} EtatCapteur;
+typedef struct {
+    RTC_DateTime date;
+    Env_Data     env;     /* temperature, humidite, pression */
+    uint16_t     lumin;   /* 0 a 1023 */
+    GPS_Data     gps;
+    EtatCapteur  etat_temp, etat_hygr, etat_pression, etat_lumin, etat_gps;
+} Mesure;
+typedef struct {
+    uint16_t log_interval;   /* minutes entre 2 mesures   (defaut 10)   */
+    uint16_t file_max_size;  /* octets max par fichier    (defaut 2048) */
+    uint8_t  timeout;        /* secondes avant abandon    (defaut 30)   */
+    uint8_t  lumin;          /* capteur lumiere actif ?   (defaut 1)    */
+    uint16_t lumin_low;      /*                           (defaut 255)  */
+    uint16_t lumin_high;     /*                           (defaut 768)  */
+    uint8_t  temp_air;       /* capteur temp. actif ?     (defaut 1)    */
+    int8_t   min_temp_air;   /*                           (defaut -10)  */
+    int8_t   max_temp_air;   /*                           (defaut 60)   */
+    uint8_t  hygr;           /* capteur humidite actif ?  (defaut 1)    */
+    int8_t   hygr_mint;      /*                           (defaut 0)    */
+    int8_t   hygr_maxt;      /*                           (defaut 50)   */
+    uint8_t  pressure;       /* capteur pression actif ?  (defaut 1)    */
+    uint16_t pressure_min;   /*                           (defaut 850)  */
+    uint16_t pressure_max;   /*                           (defaut 1080) */
+} Parametres;
 
 #endif
