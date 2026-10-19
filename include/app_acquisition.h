@@ -1,25 +1,26 @@
 #ifndef APP_ACQUISITION_H
 #define APP_ACQUISITION_H
 
-// Définit les types de données du projet
+// Bibliothèques pour les types bool, uint8_t et uint32_t
+#include <stdbool.h>
+#include <stdint.h>
+
+// Structures Mesure et Parametres du projet
 #include "cesi_types.h"
 
-// Permet d'utiliser le type size_t
-#include <stddef.h>
+// Détermine s'il est temps de réaliser une nouvelle mesure
+bool Acq_EstLHeure(uint32_t intervalle_ms);
 
-// Déclare le type bool
-#include <stdbool.h>
+// Transforme les mesures en une ligne de texte
+void Acq_FormaterLigne(const Mesure *m, char *ligne, uint8_t taille);
 
-// Initialise les capteurs
-void AppAcquisition_Init(void);
+// Vérifie si les mesures respectent les seuils configurés
+void Acq_VerifierSeuils(Mesure *m, const Parametres *p);
 
-// Lit les mesures des capteurs
-void AppAcquisition_Lire(Mesure *mesure, const Parametres *parametres);
+// Détermine si le GPS doit être lu en mode économique
+bool Acq_DoitLireGPS(bool mode_eco);
 
-// Vérifie les mesures
-void AppAcquisition_Verifier(Mesure *mesure, const Parametres *parametres);
-
-// Prépare une ligne de texte contenant les mesures
-bool AppAcquisition_Formater(const Mesure *mesure, char *buffer, size_t taille);
+// Lit les données des capteurs
+void Acq_LireTout(Mesure *m, bool mode_eco);
 
 #endif
