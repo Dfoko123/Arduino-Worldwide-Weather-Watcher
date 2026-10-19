@@ -12,6 +12,9 @@
 // Pilote du capteur BME280
 #include "grove_bme280.h"
 
+// Pilote de l'horloge RTC (date et heure de la mesure)
+#include "grove_rtc_ds1307.h"
+
 // Gestion des erreurs du projet
 #include "app_errors.h"
 
@@ -19,7 +22,13 @@
 #include <Arduino.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include <math.h>
+
+// Réglages du projet (membre 4).
+// Quand app_config.h existera, remplacer cette ligne par :
+//     #include "app_config.h"
+const Parametres *Config_Get(void);
 
 
 // ============================================================
@@ -77,6 +86,12 @@ bool Acq_DoitLireGPS(bool mode_eco)
 // 3. LIRE LES CAPTEURS
 // ============================================================
 
+// Dernière position GPS lue (gardée pour le mode économique,
+// quand le GPS n'est pas lu à cette mesure).
+static GPS_Data dernier_gps;
+static bool     dernier_gps_valide = false;
+
+
 void Acq_LireTout(Mesure *m, bool mode_eco)
 {
     // Vérifier que le pointeur reçu est valide.
@@ -85,8 +100,27 @@ void Acq_LireTout(Mesure *m, bool mode_eco)
         return;
     }
 
+    // Réglages actuels (capteurs actifs, timeout).
+    const Parametres *p = Config_Get();
+
     // --------------------------------------------------------
-    // A. Lecture du capteur BME280
+    // A. Date et heure de la mesure (horloge RTC)
+    // --------------------------------------------------------
+
+    if (GroveRTC_GetDateTime(&m->date))
+    {
+        Erreur_Effacer(ERR_RTC);
+    }
+    else
+    {
+        // Date inconnue : l'année 0 sera affichée "NA".
+        memset(&m->date, 0, sizeof(m->date));
+        Erreur_Signaler(ERR_RTC);
+    }
+
+
+    // --------------------------------------------------------
+    // B. Lecture du capteur BME280
     // --------------------------------------------------------
 
     Env_Data environnement;
@@ -95,14 +129,16 @@ void Acq_LireTout(Mesure *m, bool mode_eco)
     if (GroveBME280_ReadEnvironment(&environnement))
     {
         // Copier les valeurs dans la structure Mesure.
-        m->env.temperature_c = environnement.temperature_c;
-        m->env.humidity_percent = environnement.humidity_percent;
-        m->env.pressure_hpa = environnement.pressure_hpa;
+        m->env = environnement;
 
-        // Indiquer que les mesures ont été obtenues.
-        m->etat_temp.valide = true;
-        m->etat_hygr.valide = true;
-        m->etat_pression.valide = true;
+        // Une mesure n'est valide que si le capteur est activé
+        // dans les réglages (TEMP_AIR, HYGR, PRESSURE).
+        m->etat_temp.valide     = (p->temp_air != 0);
+        m->etat_hygr.valide     = (p->hygr != 0);
+        m->etat_pression.valide = (p->pressure != 0);
+
+        // Le capteur répond : effacer une éventuelle erreur.
+        Erreur_Effacer(ERR_CAPTEUR_ACCES);
     }
     else
     {
@@ -117,48 +153,43 @@ void Acq_LireTout(Mesure *m, bool mode_eco)
 
 
     // --------------------------------------------------------
-    // B. Lecture du capteur de lumière
+    // C. Lecture du capteur de lumière
     // --------------------------------------------------------
 
-    // Le capteur n'est lu que s'il est activé.
-    // Le paramètre lumin sera vérifié par la logique de
-    // configuration du projet. Cette fonction ne reçoit
-    // actuellement pas de Parametres en argument.
-
-    // Lire la valeur brute du capteur.
-    m->lumin = GroveLight_ReadRaw();
-
-    // La lecture analogique seule ne permet pas de détecter
-    // de façon fiable si le capteur est débranché.
-    m->etat_lumin.valide = true;
+    if (p->lumin != 0)
+    {
+        // Lire la valeur brute du capteur (0 à 1023).
+        m->lumin = GroveLight_ReadRaw();
+        m->etat_lumin.valide = true;
+    }
+    else
+    {
+        // Capteur désactivé dans les réglages (LUMIN = 0).
+        m->lumin = 0;
+        m->etat_lumin.valide = false;
+    }
 
 
     // --------------------------------------------------------
-    // C. Lecture du GPS
+    // D. Lecture du GPS
     // --------------------------------------------------------
 
     // Ne lire le GPS que si le mode de fonctionnement l'autorise.
     if (Acq_DoitLireGPS(mode_eco))
     {
-        // Le GPS peut attendre une trame jusqu'au timeout.
-        // La valeur du timeout doit être définie par l'équipe.
-        const unsigned int TIMEOUT_MS = 3000;
+        // TIMEOUT est en secondes dans les réglages.
+        uint32_t timeout_ms = (uint32_t)p->timeout * 1000UL;
 
-        bool lecture_gps = GroveGPS_ReadGGA(&m->gps, TIMEOUT_MS);
+        // (le driver attend un unsigned int : 60 s max = 60000, ça tient)
+        bool lecture_gps = GroveGPS_ReadGGA(&dernier_gps, (unsigned int)timeout_ms);
 
         // La fonction peut recevoir une trame sans position valide.
-        if (lecture_gps && m->gps.valid)
-        {
-            m->etat_gps.valide = true;
-        }
-        else
-        {
-            m->etat_gps.valide = false;
-        }
+        dernier_gps_valide = (lecture_gps && dernier_gps.valid);
     }
 
-    // Si le GPS n'a pas été lu en mode économique,
-    // conserver la dernière position disponible.
+    // Mode économique sans lecture : on reprend la dernière position.
+    m->gps = dernier_gps;
+    m->etat_gps.valide = dernier_gps_valide;
 }
 
 
@@ -174,6 +205,8 @@ void Acq_VerifierSeuils(Mesure *m, const Parametres *p)
         return;
     }
 
+    bool incoherent = false;
+
 
     // --------------------------------------------------------
     // A. Vérification de la température
@@ -186,25 +219,24 @@ void Acq_VerifierSeuils(Mesure *m, const Parametres *p)
         {
             // La mesure est disponible mais hors des limites.
             m->etat_temp.valide = false;
-            Erreur_Signaler(ERR_CAPTEUR_INCOH);
+            incoherent = true;
         }
     }
 
 
     // --------------------------------------------------------
-    // B. Vérification de l'humidité
+    // B. Humidité
     // --------------------------------------------------------
 
+    // HYGR_MINT et HYGR_MAXT sont des TEMPERATURES : en dehors de
+    // cette plage de température, l'humidité n'est pas fiable.
+    // On ne l'enregistre pas (NA), mais ce n'est PAS une erreur.
     if (m->etat_hygr.valide)
     {
-        // Les champs hygr_mint et hygr_maxt sont utilisés ici
-        // comme limites d'humidité, conformément à leur rôle
-        // supposé dans la configuration du projet.
-        if (m->env.humidity_percent < p->hygr_mint ||
-            m->env.humidity_percent > p->hygr_maxt)
+        if (m->env.temperature_c < p->hygr_mint ||
+            m->env.temperature_c > p->hygr_maxt)
         {
             m->etat_hygr.valide = false;
-            Erreur_Signaler(ERR_CAPTEUR_INCOH);
         }
     }
 
@@ -219,7 +251,7 @@ void Acq_VerifierSeuils(Mesure *m, const Parametres *p)
             m->env.pressure_hpa > p->pressure_max)
         {
             m->etat_pression.valide = false;
-            Erreur_Signaler(ERR_CAPTEUR_INCOH);
+            incoherent = true;
         }
     }
 
@@ -234,8 +266,22 @@ void Acq_VerifierSeuils(Mesure *m, const Parametres *p)
         if (m->lumin > 1023)
         {
             m->etat_lumin.valide = false;
-            Erreur_Signaler(ERR_CAPTEUR_INCOH);
+            incoherent = true;
         }
+    }
+
+
+    // --------------------------------------------------------
+    // E. Signaler ou effacer l'erreur "données incohérentes"
+    // --------------------------------------------------------
+
+    if (incoherent)
+    {
+        Erreur_Signaler(ERR_CAPTEUR_INCOH);
+    }
+    else
+    {
+        Erreur_Effacer(ERR_CAPTEUR_INCOH);
     }
 }
 
@@ -244,11 +290,13 @@ void Acq_VerifierSeuils(Mesure *m, const Parametres *p)
 // 5. FORMATER LES MESURES EN UNE LIGNE DE TEXTE
 // ============================================================
 
-// Ajouter une valeur numérique ou "NA" à la ligne.
+// Ajouter une valeur à virgule ou "NA" à la ligne.
+// ATTENTION : sur Arduino, snprintf ne sait pas afficher "%f"
+// (il écrit "?"). On utilise donc dtostrf pour la conversion.
 static void AjouterFloat(
     char *ligne,
     size_t taille,
-    const char *format,
+    uint8_t decimales,
     bool valide,
     float valeur)
 {
@@ -259,23 +307,13 @@ static void AjouterFloat(
         return;
     }
 
-    // Calculer la place encore disponible.
-    size_t longueur = strlen(ligne);
+    // Convertir le nombre en texte (ex. 26.53).
+    char texte[16];
+    dtostrf(valeur, 1, decimales, texte);
 
-    // Vérifier qu'il reste de la place.
-    if (longueur < taille)
-    {
-        // Ajouter la valeur à la suite de la ligne.
-        snprintf(
-            ligne + longueur,
-            taille - longueur,
-            format,
-            valeur
-        );
-
-        // Ajouter le séparateur.
-        strlcat(ligne, ";", taille);
-    }
+    // Ajouter la valeur puis le séparateur.
+    strlcat(ligne, texte, taille);
+    strlcat(ligne, ";", taille);
 }
 
 
@@ -296,61 +334,39 @@ void Acq_FormaterLigne(const Mesure *m, char *ligne, uint8_t taille)
     // A. Date et heure
     // --------------------------------------------------------
 
-    // Exemple : 2026-10-19;09:30:00;
-    snprintf(
-        ligne,
-        taille,
-        "%04u-%02u-%02u;%02u:%02u:%02u;",
-        m->date.year,
-        m->date.month,
-        m->date.day,
-        m->date.hours,
-        m->date.minutes,
-        m->date.seconds
-    );
+    if (m->date.year >= 2000)
+    {
+        // Exemple : 2026-10-19;09:30:00;
+        snprintf(
+            ligne,
+            taille,
+            "%04u-%02u-%02u;%02u:%02u:%02u;",
+            (unsigned int)m->date.year,
+            (unsigned int)m->date.month,
+            (unsigned int)m->date.day,
+            (unsigned int)m->date.hours,
+            (unsigned int)m->date.minutes,
+            (unsigned int)m->date.seconds
+        );
+    }
+    else
+    {
+        // Horloge illisible.
+        strlcat(ligne, "NA;NA;", taille);
+    }
 
 
     // --------------------------------------------------------
-    // B. Température
+    // B. Température, humidité, pression (2 décimales)
     // --------------------------------------------------------
 
-    AjouterFloat(
-        ligne,
-        taille,
-        "%.2f",
-        m->etat_temp.valide,
-        m->env.temperature_c
-    );
+    AjouterFloat(ligne, taille, 2, m->etat_temp.valide,     m->env.temperature_c);
+    AjouterFloat(ligne, taille, 2, m->etat_hygr.valide,     m->env.humidity_percent);
+    AjouterFloat(ligne, taille, 2, m->etat_pression.valide, m->env.pressure_hpa);
 
 
     // --------------------------------------------------------
-    // C. Humidité
-    // --------------------------------------------------------
-
-    AjouterFloat(
-        ligne,
-        taille,
-        "%.2f",
-        m->etat_hygr.valide,
-        m->env.humidity_percent
-    );
-
-
-    // --------------------------------------------------------
-    // D. Pression
-    // --------------------------------------------------------
-
-    AjouterFloat(
-        ligne,
-        taille,
-        "%.2f",
-        m->etat_pression.valide,
-        m->env.pressure_hpa
-    );
-
-
-    // --------------------------------------------------------
-    // E. Luminosité
+    // C. Luminosité
     // --------------------------------------------------------
 
     if (m->etat_lumin.valide)
@@ -374,26 +390,13 @@ void Acq_FormaterLigne(const Mesure *m, char *ligne, uint8_t taille)
 
 
     // --------------------------------------------------------
-    // F. Latitude et longitude
+    // D. Latitude et longitude (6 décimales)
     // --------------------------------------------------------
 
     if (m->etat_gps.valide && m->gps.valid)
     {
-        AjouterFloat(
-            ligne,
-            taille,
-            "%.6f",
-            true,
-            (float)m->gps.latitude
-        );
-
-        AjouterFloat(
-            ligne,
-            taille,
-            "%.6f",
-            true,
-            (float)m->gps.longitude
-        );
+        AjouterFloat(ligne, taille, 6, true, (float)m->gps.latitude);
+        AjouterFloat(ligne, taille, 6, true, (float)m->gps.longitude);
     }
     else
     {
@@ -403,7 +406,7 @@ void Acq_FormaterLigne(const Mesure *m, char *ligne, uint8_t taille)
 
 
     // --------------------------------------------------------
-    // G. Terminer la ligne
+    // E. Terminer la ligne
     // --------------------------------------------------------
 
     // Retirer le dernier point-virgule si la chaîne n'est pas vide.
